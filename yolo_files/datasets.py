@@ -96,9 +96,9 @@ def detectMarker(img, markerSize=4, totalMarker=50, draw=True):
         arr.append(center)
         arr.append([onex, oney, twox, twoy, threex, threey, fourx, foury])
 
-        if(id==10 or id==11 or id==12 or id==13):
+        if(id==16 or id==17 or id==18 or id==19):
             warp_ids.append(arr)
-            other_ids.append(arr)
+            # other_ids.append(arr)
         else:
             other_ids.append(arr)
             

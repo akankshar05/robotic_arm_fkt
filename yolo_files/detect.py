@@ -1,6 +1,8 @@
 import argparse
 import time
 from pathlib import Path
+import socket
+import threading
 
 import cv2
 import torch
@@ -14,11 +16,51 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized, TracedModel
 
+#-------server handler code------
+center_send=[]
+pixel_center=[]
+def generate_string():
+    if center_send:
+        string_without_offset=""
+        string_without_offset+=str(center_send[0][1])
+        string_without_offset+=":"
+        string_without_offset+=str(center_send[0][0])
+
+        #"x:y"=>arm
+
+        # print("before ------ ",string_without_offset)
+        string_with_offset=""
+        string_with_offset+=str(center_send[0][1]+30)
+        string_with_offset+=":"
+        string_with_offset+=str(center_send[0][0]-43)
+        # print("after ------ ",string_with_offset)
+        return string_with_offset
+
+    return "20:20"
+
+def handle_client(client_socket):
+    while True:
+        # Receive data from the client
+        data = client_socket.recv(1024).decode("utf-8")
+
+        if not data:
+            break
+
+        # If the received message is "coordinates", call the function and send its return value
+        if data.strip() == "coordinates":
+            response = generate_string()
+            client_socket.send(response.encode("utf-8"))
+
+    # Close the client socket when done
+    client_socket.close()
+#-------server handler code------
+
 #------ camera to real coordinates----------------------
 
-pixels_to_cm_x=0.05042# cm/pixel 60.5/1200 
-pixels_to_cm_y=0.0292 # 35/1200
-
+pixels_to_cm_x=0.0733# cm/pixel 60.5/1200 
+pixels_to_cm_y=0.0275 # 35/1200
+# pixels_to_cm_x=0.05042# cm/pixel 60.5/1200 
+# pixels_to_cm_y=0.0292 # 35/1200
 def real_coord(x_pixel,y_pixel):
     x_cm = x_pixel * pixels_to_cm_x
     y_cm = y_pixel * pixels_to_cm_y
@@ -31,7 +73,9 @@ def pixel_coord(x_cm,y_cm):
 
 #---------------------------------------------
 
+
 def detect(save_img=False):
+    global center_send, pixel_center
     source, weights, view_img, save_txt, imgsz, trace = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size, not opt.no_trace
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
@@ -137,15 +181,21 @@ def detect(save_img=False):
 
                 # Write results
                 center_send=[]
+                pixel_center=[]
                 for *xyxy, conf, cls in reversed(det):
 
                     #------------------GET CENTER FROM HERE----------------
-                    cx= (int(xyxy[0]) + int(xyxy[1]))//2
-                    cy= (int(xyxy[2]) + int(xyxy[3]))//2
-                    real_cx, real_cy= real_coord(cx,cy)
+
+                    c1, c2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
+                    center_x,center_y = ((c1[0] + c2[0]) // 2, (c1[1] + c2[1]) // 2)
+                   
+                    real_cx, real_cy= real_coord(center_x,center_y)
 
                     center_=[real_cx,real_cy]
+                    pixel_center_=[center_x,center_y]
                     center_send.append(center_)
+                    pixel_center.append(pixel_center_)
+
                     #----------------------------------------------------
 
                     if save_txt:  # Write to file
@@ -157,7 +207,10 @@ def detect(save_img=False):
                     if save_img or view_img:  # Add bbox to image
                         label = f'{names[int(cls)]} {conf:.2f}'
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=1)
-                print (center_send)
+                print ("PIXEL-centerrrrrrrr---- ",pixel_center_)
+                if center_send:
+                    print ("REAL-centerrrrrrrrr---- ",center_send)
+
 
             # Print time (inference + NMS)
             # print(f'{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS')
@@ -193,6 +246,23 @@ def detect(save_img=False):
 
     print(f'Done. ({time.time() - t0:.3f}s)')
 
+#-----------server function-------------
+def start_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(('172.20.10.4', 1234))
+    server.listen(5)
+    print("Server started. Listening on port 8888...")
+
+    while True:
+        client, addr = server.accept()
+        print(f"Connection from {addr[0]}:{addr[1]}")
+
+        # Create a thread to handle the client connection
+        client_handler = threading.Thread(target=handle_client, args=(client,))
+        client_handler.start()
+#-----------server function-------------
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -216,12 +286,11 @@ if __name__ == '__main__':
     parser.add_argument('--no-trace', action='store_true', help='don`t trace model')
     opt = parser.parse_args()
     print(opt)
-    #check_requirements(exclude=('pycocotools', 'thop'))
+   
+    socketThread = threading.Thread(target=start_server)
+    socketThread.start()
 
-    with torch.no_grad():
-        if opt.update:  # update all models (to fix SourceChangeWarning)
-            for opt.weights in ['yolov7.pt']:
-                detect()
-                strip_optimizer(opt.weights)
-        else:
-            detect()
+    detect()
+
+    # cvThread = threading.Thread(target=detect)
+    # cvThread.start()
